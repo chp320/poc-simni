@@ -1,39 +1,65 @@
 package com.leo.voicecounselpoc
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.google.firebase.Firebase
 import com.google.firebase.appcheck.appCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.initialize
 import com.leo.voicecounselpoc.ui.theme.VoiceCounselPOCTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
- * Phase 0 / App Check 단계.
+ * Phase 0 / 1~2단계.
  *
- * 여기서 하는 일은 딱 하나: App Check 디버그 프로바이더를 등록하고 토큰을 한 번 요청해서
- * Logcat에 디버그 시크릿이 찍히게 만드는 것. `liveModel` 연동은 아직 하지 않는다.
+ * - App Check 디버그 프로바이더 등록 및 토큰 획득 (1단계)
+ * - 마이크 런타임 권한 요청 + PCM 캡처, 진폭을 화면과 Logcat에 표시 (2단계)
  *
- * 디버그 시크릿 확인 방법:
- *   adb logcat -s DebugAppCheckProvider
- * 출력된 UUID를 Firebase 콘솔 > App Check > 앱 > (메뉴) 디버그 토큰 관리 에 등록한다.
- * 등록하지 않으면 Firebase AI Logic 호출이 거부된다(2026년 7월부터 자동 강제).
+ * 캡처한 오디오는 아직 어디로도 보내지 않는다. `liveModel` 연동은 3단계.
  */
 class MainActivity : ComponentActivity() {
 
-    private var status by mutableStateOf("App Check 토큰 요청 중…")
+    private var appCheckStatus by mutableStateOf("App Check 토큰 요청 중…")
+    private var micStatus by mutableStateOf("마이크 대기 중")
+    private var isRecording by mutableStateOf(false)
+    private var amplitude by mutableIntStateOf(0)
+
+    private var recordJob: Job? = null
+
+    private val requestMicPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                startRecording()
+            } else {
+                micStatus = "마이크 권한이 거부되었습니다. 설정에서 허용 후 다시 시도하세요."
+                Log.w(TAG, "RECORD_AUDIO 권한 거부됨")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,34 +68,95 @@ class MainActivity : ComponentActivity() {
         Firebase.appCheck.installAppCheckProviderFactory(
             DebugAppCheckProviderFactory.getInstance()
         )
-
-        // 토큰을 실제로 한 번 요청한다. 성공/실패로 콘솔 등록이 끝났는지 바로 알 수 있다.
         Firebase.appCheck.getAppCheckToken(false)
             .addOnSuccessListener {
                 Log.i(TAG, "App Check 토큰 획득 성공 — 디버그 토큰이 콘솔에 등록되어 있다.")
-                status = "✅ App Check OK\n\n디버그 토큰이 Firebase 콘솔에 등록되어 있습니다.\n2단계로 진행 가능합니다."
+                appCheckStatus = "✅ App Check OK"
             }
             .addOnFailureListener { e ->
                 Log.w(TAG, "App Check 토큰 획득 실패 — 콘솔에 디버그 토큰을 등록해야 한다.", e)
-                status = "❌ App Check 실패\n\n" +
-                        "Logcat에서 'DebugAppCheckProvider' 태그의 디버그 시크릿(UUID)을 찾아\n" +
-                        "Firebase 콘솔 > App Check > 디버그 토큰 관리에 등록하고 다시 실행하세요.\n\n" +
-                        "원인: ${e.message}"
+                appCheckStatus = "❌ App Check 실패: ${e.message}"
             }
 
         enableEdgeToEdge()
         setContent {
             VoiceCounselPOCTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Text(
-                        text = status,
+                    Column(
                         modifier = Modifier
                             .padding(innerPadding)
-                            .padding(24.dp)
-                    )
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(appCheckStatus)
+                        Text(micStatus)
+
+                        Button(onClick = ::onToggleRecording) {
+                            Text(if (isRecording) "녹음 정지" else "녹음 시작")
+                        }
+
+                        Text("진폭: $amplitude / ${AudioRecorder.MAX_AMPLITUDE}")
+                        LinearProgressIndicator(
+                            progress = { amplitude.toFloat() / AudioRecorder.MAX_AMPLITUDE },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }
+    }
+
+    private fun onToggleRecording() {
+        when {
+            isRecording -> stopRecording()
+
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED -> startRecording()
+
+            else -> requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun startRecording() {
+        if (isRecording) return
+        isRecording = true
+        micStatus = "🎙 녹음 중 — 말해보세요"
+        Log.i(TAG, "오디오 캡처 시작 (${AudioRecorder.SAMPLE_RATE}Hz / 16-bit / mono)")
+
+        var chunkCount = 0
+        recordJob = lifecycleScope.launch {
+            try {
+                AudioRecorder().start().collect { chunk ->
+                    amplitude = chunk.peakAmplitude
+                    // 청크는 100ms마다 오므로 로그는 약 0.5초에 한 번만 남긴다.
+                    if (chunkCount++ % 5 == 0) {
+                        Log.d(TAG, "진폭=${chunk.peakAmplitude} (청크 ${chunk.pcm.size}바이트)")
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "오디오 캡처 실패", e)
+                micStatus = "캡처 실패: ${e.message}"
+                isRecording = false
+                amplitude = 0
+            }
+        }
+    }
+
+    private fun stopRecording() {
+        recordJob?.cancel()
+        recordJob = null
+        isRecording = false
+        amplitude = 0
+        micStatus = "마이크 정지됨"
+        Log.i(TAG, "오디오 캡처 정지")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // 화면을 벗어나면 마이크를 놓아준다. Phase 0은 포그라운드 전용이다.
+        if (isRecording) stopRecording()
     }
 
     companion object {

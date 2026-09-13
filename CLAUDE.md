@@ -65,8 +65,14 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 2026-09-13: App Check 디버그 토큰 값은 저장소·문서·커밋 메시지에 절대 기록하지 않는다 - 토큰은 App Check를 우회할 수 있는 시크릿이다. 기기/에뮬레이터별로 재생성 가능하므로 기록할 필요도 없다 (영향받는 항목: CLAUDE.md, 커밋 메시지, 진행 로그)
 - 2026-09-13: `.git` 디렉터리를 삭제하고 `git init`으로 재초기화한다 - 최초 커밋 `01d8b74`에 `google-services.json`(API 키 포함)이 들어가 있었고 remote가 없어 히스토리를 잃을 위험이 없다. 히스토리 재작성보다 단순하고 확실하다 (영향받는 항목: git 히스토리 전체, `.gitignore`)
 - 2026-09-13: Firebase 콘솔에 등록하는 App Check 디버그 토큰의 이름은 `{기기구분}-{용도}-{등록일자}` 형식으로 정한다 (등록일자는 `YYYYMMDD`). 예: `emulator-pixel2-dev-20260913`, `alldocube-iplay60-dev-20260913` - 개발 중 여러 기기(에뮬레이터, 실기기)에서 토큰이 각각 생성되는데 이름이 없으면 어느 기기 것인지 구분이 안 되고, 기기를 wipe하거나 정리할 때 어떤 토큰을 삭제해야 할지 판단할 수 없다 (영향받는 항목: Firebase 콘솔 App Check 디버그 토큰 목록)
+- 2026-09-13: 마이크 캡처는 `AudioRecord` + `MediaRecorder.AudioSource.MIC`로 구현하고 100ms 단위 청크를 `Flow<Chunk>`로 방출한다 - Live API 입력 포맷(PCM 16-bit / 24kHz / mono)에 맞춰 3~4단계에서 이 Flow를 세션에 그대로 연결할 수 있게 한다. `VOICE_COMMUNICATION`은 에코 캔슬이 붙지만 에뮬레이터에서 동작이 불확실해 스파이크 단계에서는 `MIC`를 쓴다 (영향받는 항목: `AudioRecorder.kt`)
+- 2026-09-13: 마이크 권한은 앱 시작 시가 아니라 "녹음 시작" 버튼을 누를 때 요청한다 - 사용자가 왜 마이크가 필요한지 알 수 있는 시점에 묻는 것이 권한 승인률과 UX 모두에 낫고, 권한 없이도 앱이 켜지는지 확인할 수 있다 (영향받는 항목: `MainActivity.onToggleRecording`)
+- 2026-09-13: `onStop()`에서 녹음을 정지한다 - Phase 0은 포그라운드 전용이며, 백그라운드에서 마이크를 계속 쥐고 있으면 Android 14에서 foreground service type 선언이 강제된다. 지금은 그 요건을 만들지 않는 쪽을 택한다 (영향받는 항목: `MainActivity.onStop`, 향후 과제의 백그라운드 동작)
+- 2026-09-13: 터미널에서 띄운 에뮬레이터는 macOS가 마이크 요청을 Terminal.app 것으로 취급한다 - 프로세스 계보가 `Terminal.app → zsh → claude → emulator`라서 Android Studio에 부여한 마이크 권한이 적용되지 않는다. 마이크가 걸린 단계부터는 에뮬레이터를 Android Studio Device Manager에서 실행한다 (영향받는 항목: 2단계 이후 에뮬레이터 실행 방법)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.
 
 - **App Check 프로바이더 전환** — 지금의 디버그 프로바이더 + 디버그 토큰 수동 등록은 개발 환경에서 어느 기기에서 발생한 요청인지 추적하기 위한 임시 방편이다. 앱 마켓을 통한 실제 배포 시에는 Play Integrity 프로바이더로 전환해 정식 API 호출로 자동 검증되므로, 수동 토큰 등록과 위의 토큰 네이밍 룰 자체가 불필요해진다. 배포 논의 시점에 다룬다.
+- **에코 캔슬레이션 / `AudioSource` 전환** — 5단계에서 스피커 재생이 붙으면 모델 음성이 마이크로 되먹임될 수 있다. `AudioSource.VOICE_COMMUNICATION` 또는 `AcousticEchoCanceler` 적용을 검토해야 하며, 끼어들기(barge-in) 품질과 직결된다. 실기기 검증 시점에 다룬다.
+- **백그라운드 통화 유지** — 지금은 `onStop()`에서 마이크를 놓는다. "화면을 꺼도 통화가 이어진다" 요건이 생기면 Android 14의 `foregroundServiceType="microphone"` 선언과 알림 채널이 필요하다. 에뮬레이터(API 30)에서는 재현되지 않고 실기기(Android 14)에서만 드러나는 지점이다.
