@@ -37,14 +37,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Phase 0 / 1~3단계.
+ * Phase 0 / 1~5단계.
  *
  * - App Check 디버그 프로바이더 등록 및 토큰 획득 (1단계)
  * - 마이크 런타임 권한 요청 + PCM 캡처, 진폭을 화면과 Logcat에 표시 (2단계)
  *
  * - Live 세션 연결/해제 (3단계)
- *
- * 캡처한 오디오를 세션으로 보내는 것은 4단계 범위다.
+ * - 음성 대화: 송신·수신·스피커 재생 + 양쪽 전사 표시 (4~5단계)
  */
 class MainActivity : ComponentActivity() {
 
@@ -59,6 +58,11 @@ class MainActivity : ComponentActivity() {
     private var sessionStatus by mutableStateOf("Live 세션: 미연결")
     private var isSessionConnected by mutableStateOf(false)
     private var isSessionBusy by mutableStateOf(false)
+
+    private var isConversing by mutableStateOf(false)
+    private var lastInputTranscript by mutableStateOf("")
+    private var lastOutputTranscript by mutableStateOf("")
+    private var conversationJob: Job? = null
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -104,6 +108,20 @@ class MainActivity : ComponentActivity() {
                             Text(if (isSessionConnected) "세션 해제" else "세션 연결")
                         }
 
+                        Button(
+                            onClick = ::onToggleConversation,
+                            enabled = isSessionConnected && !isSessionBusy
+                        ) {
+                            Text(if (isConversing) "대화 종료" else "🎙 대화 시작")
+                        }
+
+                        if (lastInputTranscript.isNotBlank()) {
+                            Text("[내 말] $lastInputTranscript")
+                        }
+                        if (lastOutputTranscript.isNotBlank()) {
+                            Text("[모델] $lastOutputTranscript")
+                        }
+
                         Text(micStatus)
 
                         Button(onClick = ::onToggleRecording) {
@@ -144,6 +162,46 @@ class MainActivity : ComponentActivity() {
                 sessionStatus = "❌ 연결 실패: ${e.message}"
             } finally {
                 isSessionBusy = false
+            }
+        }
+    }
+
+    private fun onToggleConversation() {
+        if (isConversing) {
+            liveSession.stopConversation()
+            conversationJob?.cancel()
+            conversationJob = null
+            isConversing = false
+            micStatus = "대화 종료됨"
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        isConversing = true
+        micStatus = "🎙 대화 중 — 말해보세요"
+        lastInputTranscript = ""
+        lastOutputTranscript = ""
+
+        conversationJob = lifecycleScope.launch {
+            try {
+                liveSession.startConversation { input, output ->
+                    if (input != null) lastInputTranscript = input
+                    if (output != null) lastOutputTranscript = output
+                }
+                // startAudioConversation() 은 시작만 하고 즉시 반환한다.
+                // 대화는 stopConversation() 을 부를 때까지 계속된다.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "음성 대화 실패", e)
+                micStatus = "❌ 대화 실패: ${e.message}"
+                isConversing = false
             }
         }
     }
@@ -199,6 +257,12 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // 화면을 벗어나면 마이크를 놓아준다. Phase 0은 포그라운드 전용이다.
         if (isRecording) stopRecording()
+        if (isConversing) {
+            liveSession.stopConversation()
+            conversationJob?.cancel()
+            conversationJob = null
+            isConversing = false
+        }
     }
 
     override fun onDestroy() {
