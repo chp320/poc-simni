@@ -3,14 +3,18 @@ package com.leo.voicecounselpoc
 import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.ActivityDetectionConfig
 import com.google.firebase.ai.type.AudioTranscriptionConfig
 import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.PublicPreviewAPI
+import com.google.firebase.ai.type.RealtimeInputConfig
 import com.google.firebase.ai.type.ResponseModality
+import com.google.firebase.ai.type.activityDetectionConfig
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.liveAudioConversationConfig
 import com.google.firebase.ai.type.liveGenerationConfig
+import com.google.firebase.ai.type.realtimeInputConfig
 
 /**
  * Gemini Live API 세션의 연결·해제와 음성 대화를 담당한다 (Phase 0 3~5단계).
@@ -47,21 +51,37 @@ class LiveSessionManager {
             modelName = modelName,
             generationConfig = liveGenerationConfig {
                 responseModality = ResponseModality.AUDIO
+
                 // 양쪽 전사를 켜야 transcriptHandler 로 텍스트가 들어온다.
-                // Phase 0의 "한국어 인식/발화 품질 기록"에 필요하다.
+                // 한국어 인식/발화 품질 기록에 필요하다.
                 inputAudioTranscription = AudioTranscriptionConfig()
                 outputAudioTranscription = AudioTranscriptionConfig()
+
+                // 턴 종료 판단 (이슈 #22).
+                // 말 시작은 민감하게(HIGH) 잡아 끼어들기를 유지하고,
+                // 말 끝은 둔감하게(LOW) 잡아 생각하는 시간을 끊지 않는다.
+                realtimeInputConfig = realtimeInputConfig {
+                    automaticActivityDetection = activityDetectionConfig {
+                        startSensitivity = ActivityDetectionConfig.Sensitivity.HIGH
+                        endSensitivity = ActivityDetectionConfig.Sensitivity.LOW
+                        silenceDurationMs = AiConfig.TurnDetection.SILENCE_DURATION_MS
+                        prefixPaddingMs = AiConfig.TurnDetection.PREFIX_PADDING_MS
+                    }
+                    // NO_INTERRUPT 로 두면 끼어들기가 죽는다. Phase 0에서 확인된
+                    // "즉시 중단"을 유지해야 하므로 INTERRUPT 를 명시한다.
+                    activityHandling = RealtimeInputConfig.ActivityHandling.INTERRUPT
+                }
             },
-            systemInstruction = content {
-                text(
-                    "당신은 한국어로 대화하는 상담 도우미입니다. " +
-                        "항상 한국어로, 한두 문장으로 짧고 자연스럽게 응답하세요."
-                )
-            }
+            systemInstruction = content { text(SystemInstruction.COUNSELING) }
         )
 
         session = model.connect()
-        Log.i(TAG, "Live 세션 연결 성공 — 모델=$modelName")
+        Log.i(
+            TAG,
+            "Live 세션 연결 성공 — 모델=$modelName, " +
+                "silenceDurationMs=${AiConfig.TurnDetection.SILENCE_DURATION_MS}, " +
+                "endSensitivity=LOW"
+        )
     }
 
     /**

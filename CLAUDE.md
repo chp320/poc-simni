@@ -94,7 +94,7 @@ S1 아키텍처 ─→ S3 대화 동작 튜닝 ─→ S2 통화 UX ─┬→ S4 
 ```
 
 - [x] S1 아키텍처 정리
-- [ ] S3 대화 동작 튜닝 — 턴 감지(#22) + 시스템 지시문(#16)
+- [x] S3 대화 동작 튜닝 — 턴 감지(#22) + 시스템 지시문(#16)
 - [ ] S2 통화 UX (#20)
 - [ ] S4 면책 고지 (#18)
 - [ ] S5 위기 대응 (#17)
@@ -199,6 +199,9 @@ S1 아키텍처 ─→ S3 대화 동작 튜닝 ─→ S2 통화 UX ─┬→ S4 
 - 2026-09-13: 통화 상태와 로직을 `CallViewModel`이 단독 소유하고 `MainActivity`는 Firebase 초기화·권한 요청·화면 그리기만 담당한다 (S1) - Activity에 상태를 두면 화면 회전 시 재생성되면서 Live 세션이 끊긴다. 실기기 검증에서 회전 전후 세션이 유지되고 재연결 로그가 발생하지 않음을 확인했다. Context가 필요한 일(권한 확인·요청)만 Activity에 남겼다 (영향받는 항목: `CallViewModel.kt`, `CallUiState.kt`, `MainActivity.kt`)
 - 2026-09-13: 통화 단계를 `Idle → Connecting → Connected → InCall` 로 모델링한다 - 현재 UI는 "세션 연결"과 "대화 시작" 버튼 두 개로 나뉘어 있지만, S2에서 하나로 합쳐도 이 단계 모델은 그대로 쓴다. 전이가 자동으로 이어질 뿐이고 `Connecting`이 연결 중 화면에 대응한다. 지금 2단계 흐름에 맞춰 모델링하면 S2에서 재작업이 생긴다 (영향받는 항목: `CallUiState.kt`, 이슈 #20)
 - 2026-09-13: `onStop()`에서 마이크 검증용 캡처만 멈추고 Live 세션은 유지한다 - 화면 회전으로도 `onStop()`이 호출되므로 여기서 세션을 끊으면 S1의 목적이 무너진다. 포그라운드 전용 원칙은 유지하되 세션 정리는 `ViewModel.onCleared()`로 옮겼다 (영향받는 항목: `MainActivity.onStop`, `CallViewModel.onCleared`)
+- 2026-09-13: 턴 종료 침묵 임계값을 **3000ms**로 확정한다 (S3 / 이슈 #22) - 실기기 튜닝 결과 1500ms와 2000ms 모두 부족했다. "음.. 지금 시각은 4시 32분..(3초) 입니다"에서 '입니다' 전에 응답이 시작됐다. 3000ms에서 끊김이 사라졌다. 짧은 답변 후 3초 정적이라는 트레이드오프가 있으나, 상담 맥락에서는 기다려주는 어색함보다 끊기는 불쾌함이 크다는 판단을 따른다. 튜닝 이력은 `AiConfig.TurnDetection` 주석에 남겼다 (영향받는 항목: `AiConfig.TurnDetection.SILENCE_DURATION_MS`)
+- 2026-09-13: 시스템 지시문을 `SystemInstruction.kt`로 분리한다 - 문구를 자주 고치며 대화 품질을 비교해야 하는데, `LiveSessionManager`에 인라인으로 두면 세션 로직과 뒤섞인다. 지시문만 고칠 때 세션 코드를 건드리지 않아도 된다 (영향받는 항목: `SystemInstruction.kt`, `LiveSessionManager.connect`)
+- 2026-09-13: `activityHandling`을 `INTERRUPT`로 **명시**한다 - 기본값에 맡기지 않는다. `NO_INTERRUPT`가 되면 Phase 0에서 확인한 "끼어들기 즉시 중단"이 죽는다. 턴 종료를 늦추는 작업(`endSensitivity = LOW`)과 끼어들기 유지(`startSensitivity = HIGH`)는 서로 반대 방향이라, 하나를 고치다 다른 하나가 깨지지 않도록 둘 다 명시적으로 고정했다 (영향받는 항목: `LiveSessionManager`의 `realtimeInputConfig`)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.
