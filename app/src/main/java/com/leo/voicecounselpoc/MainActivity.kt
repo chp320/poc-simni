@@ -31,16 +31,20 @@ import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.initialize
 import com.leo.voicecounselpoc.ui.theme.VoiceCounselPOCTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Phase 0 / 1~2단계.
+ * Phase 0 / 1~3단계.
  *
  * - App Check 디버그 프로바이더 등록 및 토큰 획득 (1단계)
  * - 마이크 런타임 권한 요청 + PCM 캡처, 진폭을 화면과 Logcat에 표시 (2단계)
  *
- * 캡처한 오디오는 아직 어디로도 보내지 않는다. `liveModel` 연동은 3단계.
+ * - Live 세션 연결/해제 (3단계)
+ *
+ * 캡처한 오디오를 세션으로 보내는 것은 4단계 범위다.
  */
 class MainActivity : ComponentActivity() {
 
@@ -50,6 +54,11 @@ class MainActivity : ComponentActivity() {
     private var amplitude by mutableIntStateOf(0)
 
     private var recordJob: Job? = null
+
+    private val liveSession = LiveSessionManager()
+    private var sessionStatus by mutableStateOf("Live 세션: 미연결")
+    private var isSessionConnected by mutableStateOf(false)
+    private var isSessionBusy by mutableStateOf(false)
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -89,6 +98,12 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(appCheckStatus)
+
+                        Text(sessionStatus)
+                        Button(onClick = ::onToggleSession, enabled = !isSessionBusy) {
+                            Text(if (isSessionConnected) "세션 해제" else "세션 연결")
+                        }
+
                         Text(micStatus)
 
                         Button(onClick = ::onToggleRecording) {
@@ -102,6 +117,33 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private fun onToggleSession() {
+        if (isSessionBusy) return
+        lifecycleScope.launch {
+            isSessionBusy = true
+            try {
+                if (isSessionConnected) {
+                    liveSession.disconnect()
+                    isSessionConnected = false
+                    sessionStatus = "Live 세션: 해제됨"
+                } else {
+                    sessionStatus = "Live 세션: 연결 중… (${AiConfig.LIVE_MODEL_NAME})"
+                    liveSession.connect(AiConfig.LIVE_MODEL_NAME)
+                    isSessionConnected = true
+                    sessionStatus = "✅ Live 세션 연결됨 (${AiConfig.LIVE_MODEL_NAME})"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Live 세션 오류", e)
+                isSessionConnected = false
+                sessionStatus = "❌ 연결 실패: ${e.message}"
+            } finally {
+                isSessionBusy = false
             }
         }
     }
@@ -157,6 +199,14 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // 화면을 벗어나면 마이크를 놓아준다. Phase 0은 포그라운드 전용이다.
         if (isRecording) stopRecording()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // lifecycleScope 는 이 시점에 이미 취소되므로 별도 스코프에서 정리한다.
+        if (liveSession.isConnected) {
+            CoroutineScope(Dispatchers.IO).launch { liveSession.disconnect() }
+        }
     }
 
     companion object {

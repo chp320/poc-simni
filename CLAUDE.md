@@ -40,7 +40,7 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 (이 섹션은 진행하면서 계속 업데이트한다)
 - [x] Firebase 프로젝트 연결 및 SDK 의존성 추가
 - [x] 마이크 권한 요청 및 오디오 캡처 구현
-- [ ] `liveModel` 초기화 및 세션 연결
+- [x] `liveModel` 초기화 및 세션 연결
 - [ ] 오디오 스트리밍 송수신 구현
 - [ ] 스피커 재생 확인
 - [ ] 체감 지연시간/품질 기록
@@ -73,6 +73,10 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 2026-09-13: 2단계는 에뮬레이터에서 검증 완료로 판정한다 - 무음 진폭 402 대비 발화 시 최대 8672(중앙값 1967, 98샘플)로 20배 이상 스윙이 확인됐고, 청크 크기 4800바이트가 24kHz·16-bit·mono·100ms와 정확히 일치한다 (영향받는 항목: 진행 로그 2단계)
 - 2026-09-13: 에뮬레이터 Graphics 모드를 `auto`에서 소프트웨어 렌더링으로 바꿀 것을 권장한다 - `auto`가 AMD GPU(Make 1002)에서 호스트 GLES를 선택하면서 `Failed to restore previous context: 12297`로 창이 검게 표시된다. 게스트는 정상이며 호스트 창만 그려지지 않는 문제라, 급하면 `adb`(input tap / exec-out screencap / logcat)로 우회해 검증할 수 있다 (영향받는 항목: AVD `hw.gpu.mode`, 에뮬레이터 육안 확인 가능 여부)
 - 2026-09-13: 에뮬레이터 마이크는 Extended Controls의 `enable host microphone access`를 켜야 동작한다 - 꺼져 있으면 에뮬레이터가 입력을 0으로 채워(`-allow-host-audio` 미적용) 진폭이 4에 고정된다. `hw.audioInput=yes`와는 별개인 런타임 토글이다 (영향받는 항목: 에뮬레이터에서의 마이크 검증)
+- 2026-09-13: 3단계 완료 — `gemini-3.1-flash-live-preview`가 실제로 연결된다(연결 소요 약 1.7초). fallback 모델로 전환할 필요가 없다 - preview 모델이라 연결 자체가 실패할 위험을 최대 리스크로 보고 상수 분리까지 해뒀는데, 실측으로 해소됐다 (영향받는 항목: `AiConfig.LIVE_MODEL_NAME`, 진행 로그 3단계)
+- 2026-09-13: `LiveSession` 타입을 `LiveSessionManager` 밖으로 내보내지 않는다 - Live API는 `@PublicPreviewAPI` opt-in을 요구해서, 타입이 노출되면 `MainActivity`까지 `@OptIn`이 전염된다(실제 컴파일 에러 발생). preview 표면을 한 파일에 가두면 SDK가 바뀔 때 수정 범위도 한 파일로 제한된다 (영향받는 항목: `LiveSessionManager.isConnected`, `MainActivity`)
+- 2026-09-13: 에뮬레이터 검은 화면 문제는 더 파지 않고 실기기로 전환한다 - `hw.gpu.mode`를 `swiftshader_indirect`(소프트웨어 렌더링)로 바꿔 실제 적용(`hardware-qemu.ini`에 `swiftshader`)됐는데도 증상이 동일했다. 남은 선택지(IDE 재시작, 에뮬레이터 업데이트, ANGLE)는 확실성이 없고 PoC 목표와 무관하다. 실기기는 검은 화면·macOS 마이크 권한·에뮬레이터 마이크 토글 세 문제를 동시에 제거한다 (영향받는 항목: 4~6단계 검증 환경)
+- 2026-09-13: 화면이 보이지 않아도 `adb`로 검증을 진행한다 - `input tap`(좌표는 `uiautomator dump`로 확보), `exec-out screencap`, `logcat`만으로 탭·화면 확인·로그 판독이 모두 가능하다. 실제로 2단계 진폭 검증과 3단계 세션 연결을 이 방식으로 끝냈다 (영향받는 항목: 호스트 렌더링 문제 발생 시 대응)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.
