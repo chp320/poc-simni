@@ -46,6 +46,19 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
     /** 마지막으로 말이 오간 시각(통화 경과 초 기준). 긴 침묵 판단에 쓴다. */
     private var lastActivitySec = 0
 
+    /**
+     * 내가 마지막으로 말한 시각과 모델이 마지막으로 답한 시각 (통화 경과 초 기준).
+     *
+     * 이슈 #24: 세션은 살아 있는데(`isAudioConversationActive() == true`) 모델만 응답을
+     * 멈추는 경우가 있다. 2.5 모델에서 문장 중간("혼자 고민하지 마시고,")에 끊긴 채
+     * 세션 객체는 멀쩡했다. 생존 확인만으로는 이 상태를 잡을 수 없어서
+     * "내가 말했는데 답이 없다"를 따로 감시한다.
+     *
+     * -1 은 아직 한 번도 없었다는 뜻이다.
+     */
+    private var lastUserSpeechSec = -1
+    private var lastModelReplySec = -1
+
     /** App Check 토큰을 한 번 요청해 콘솔 등록 여부를 확인한다. 화면 진입 시 1회. */
     fun verifyAppCheck() {
         if (_uiState.value.appCheck != AppCheckStatus.Checking) return
@@ -99,21 +112,32 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun startConversation() {
         lastActivitySec = 0
+        lastUserSpeechSec = -1
+        lastModelReplySec = -1
         _uiState.update { it.copy(phase = CallPhase.InCall, elapsedSeconds = 0) }
 
         conversationJob = viewModelScope.launch {
             try {
-                liveSession.startConversation { input, output ->
-                    lastActivitySec = _uiState.value.elapsedSeconds
-                    _uiState.update {
-                        it.copy(
-                            inputTranscript = input ?: it.inputTranscript,
-                            outputTranscript = output ?: it.outputTranscript,
-                            // 말이 오갔으니 침묵 안내는 거둔다.
-                            notice = if (it.notice == CallNotice.StillThere) null else it.notice,
-                        )
-                    }
-                }
+                liveSession.startConversation(
+                    onTranscript = { input, output ->
+                        val now = _uiState.value.elapsedSeconds
+                        lastActivitySec = now
+                        if (input != null) lastUserSpeechSec = now
+                        if (output != null) lastModelReplySec = now
+                        _uiState.update {
+                            it.copy(
+                                inputTranscript = input ?: it.inputTranscript,
+                                outputTranscript = output ?: it.outputTranscript,
+                                // 말이 오갔으니 침묵 안내는 거둔다.
+                                notice = if (it.notice == CallNotice.StillThere) null else it.notice,
+                            )
+                        }
+                    },
+                    onGoAway = { timeLeft ->
+                        Log.w(TAG, "서버 종료 통지 수신 — 경과 ${_uiState.value.elapsedSeconds}초, timeLeft=$timeLeft")
+                        endCall("서버에서 연결을 종료했어요.")
+                    },
+                )
                 // startAudioConversation() 은 시작만 하고 즉시 반환한다.
             } catch (e: CancellationException) {
                 throw e
@@ -175,6 +199,31 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
 
                 val elapsed = current.elapsedSeconds + 1
                 val silentFor = elapsed - lastActivitySec
+
+                // 이슈 #24: 세션이 아무 예외 없이 죽는 경우가 있다.
+                // 화면만 "통화 중"인 채로 사용자가 계속 말하는 상황을 막으려면 직접 확인해야 한다.
+                if (liveSession.isConversationAlive() == false) {
+                    Log.w(
+                        TAG,
+                        "대화가 예고 없이 종료됨 — 경과 ${elapsed}초, " +
+                            "마지막 발화 이후 ${silentFor}초, 최근 전사=\"${current.outputTranscript.take(40)}\""
+                    )
+                    endCall("연결이 끊겼어요. 다시 통화해 주세요.")
+                    return@launch
+                }
+
+                // 세션은 살아 있는데 모델만 응답을 멈춘 경우 (이슈 #24).
+                // 생존 확인으로는 잡히지 않으므로 "말했는데 답이 없다"를 직접 본다.
+                val awaitingReply = lastUserSpeechSec >= 0 && lastModelReplySec < lastUserSpeechSec
+                if (awaitingReply && elapsed - lastUserSpeechSec >= AiConfig.Session.NO_REPLY_TIMEOUT_SEC) {
+                    Log.w(
+                        TAG,
+                        "모델 무응답 — 경과 ${elapsed}초, 마지막 발화 ${lastUserSpeechSec}초, " +
+                            "마지막 응답 ${lastModelReplySec}초, 세션 생존=${liveSession.isConversationAlive()}"
+                    )
+                    endCall("응답이 오지 않아 통화를 마쳤어요. 다시 통화해 주세요.")
+                    return@launch
+                }
 
                 when {
                     elapsed >= AiConfig.Session.MAX_DURATION_SEC -> {

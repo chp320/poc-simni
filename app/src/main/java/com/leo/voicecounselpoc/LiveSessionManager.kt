@@ -35,9 +35,14 @@ class LiveSessionManager {
     val isConnected: Boolean
         get() = session != null
 
-    /** 음성 대화가 진행 중인지. */
-    val isConversationActive: Boolean
-        get() = session?.isAudioConversationActive() == true
+    /**
+     * 음성 대화가 실제로 살아 있는지.
+     *
+     * 이슈 #24: 세션이 아무 예외 없이 죽는 경우가 있어 주기적으로 확인해야 한다.
+     * 세션을 연 적이 없으면 false 가 아니라 null 을 돌려준다 — "죽었다"와
+     * "아직 시작 안 했다"를 호출부가 구분할 수 있어야 하기 때문이다.
+     */
+    fun isConversationAlive(): Boolean? = session?.isAudioConversationActive()
 
     /**
      * Live 세션을 연다. 이미 열려 있으면 먼저 닫고 다시 연결한다.
@@ -94,7 +99,10 @@ class LiveSessionManager {
      *
      * @param onTranscript (내가 말한 내용, 모델이 말한 내용) — 둘 중 하나만 올 수 있다.
      */
-    suspend fun startConversation(onTranscript: (input: String?, output: String?) -> Unit) {
+    suspend fun startConversation(
+        onTranscript: (input: String?, output: String?) -> Unit,
+        onGoAway: (String) -> Unit = {},
+    ) {
         val open = checkNotNull(session) { "세션이 연결되지 않았습니다. connect() 를 먼저 호출하세요." }
 
         Log.i(TAG, "음성 대화 시작 (끼어들기 활성화)")
@@ -108,6 +116,13 @@ class LiveSessionManager {
                     if (inputText != null) Log.i(TAG, "[내 말] $inputText")
                     if (outputText != null) Log.i(TAG, "[모델] $outputText")
                     onTranscript(inputText, outputText)
+                }
+                // 서버가 세션을 닫겠다고 알려오는 경로. 이걸 설정하지 않아서
+                // 이슈 #24 (세션이 조용히 죽음)를 감지하지 못했다.
+                goAwayHandler = { goAway ->
+                    val detail = goAway.timeLeft.toString()
+                    Log.w(TAG, "서버가 세션 종료를 통지 — timeLeft=$detail")
+                    onGoAway(detail)
                 }
             }
         )
