@@ -69,6 +69,7 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 2026-09-13: 마이크 권한은 앱 시작 시가 아니라 "녹음 시작" 버튼을 누를 때 요청한다 - 사용자가 왜 마이크가 필요한지 알 수 있는 시점에 묻는 것이 권한 승인률과 UX 모두에 낫고, 권한 없이도 앱이 켜지는지 확인할 수 있다 (영향받는 항목: `MainActivity.onToggleRecording`)
 - 2026-09-13: `onStop()`에서 녹음을 정지한다 - Phase 0은 포그라운드 전용이며, 백그라운드에서 마이크를 계속 쥐고 있으면 Android 14에서 foreground service type 선언이 강제된다. 지금은 그 요건을 만들지 않는 쪽을 택한다 (영향받는 항목: `MainActivity.onStop`, 향후 과제의 백그라운드 동작)
 - 2026-09-13: 터미널에서 띄운 에뮬레이터는 macOS가 마이크 요청을 Terminal.app 것으로 취급한다 - 프로세스 계보가 `Terminal.app → zsh → claude → emulator`라서 Android Studio에 부여한 마이크 권한이 적용되지 않는다. 마이크가 걸린 단계부터는 에뮬레이터를 Android Studio Device Manager에서 실행한다 (영향받는 항목: 2단계 이후 에뮬레이터 실행 방법)
+- 2026-09-13: Gradle 스크립트나 `AndroidManifest.xml`을 터미널에서 수정하면 그 사실을 사용자에게 즉시 알린다 - `./gradlew assembleDebug`는 APK만 만들 뿐 Android Studio의 프로젝트 모델을 갱신하지 않는다. IDE 밖에서 빌드 파일이 바뀌면 Android Studio가 모델을 낡은 것으로 보고 실행 버튼을 비활성화하며, `Sync Project with Gradle Files`를 눌러야 풀린다. 실제로 이 이유로 실행 버튼이 막혀 원인 파악에 시간을 썼다. Kotlin 소스만 고칠 때는 해당하지 않는다 (영향받는 항목: 작업 보고 방식, `*.gradle.kts` / `libs.versions.toml` / `AndroidManifest.xml` 수정 시)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.
