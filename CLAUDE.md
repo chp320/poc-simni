@@ -11,11 +11,13 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 기존에 진행 중인 HomeLibrary(Android 도서 관리 앱), Spring Boot 관리 시스템과는 독립된 프로젝트다. 이 저장소의 코드/의존성을 그쪽과 섞지 않는다.
 - 개발은 MacBook에서 진행하고, 테스트 기기는 Alldocube iPlay 60 mini Pro(Android 14)다.
 
-## 기술 스택 (Phase 0 한정)
+## 기술 스택
 - Android (Kotlin)
 - Firebase AI Logic SDK → Gemini Live API 연동
 - 모델: Gemini Live API를 지원하는 최신 native-audio 모델 (정확한 모델 문자열은 Firebase 문서에서 최신값 확인 후 코드에 명시)
-- 백엔드 없음 — Phase 0에서는 클라이언트에서 Firebase AI Logic을 직접 호출
+- 백엔드 없음 — 현재는 클라이언트에서 Firebase AI Logic을 직접 호출 (백엔드·토큰 발급은 Phase 2, 이슈 #11)
+- UI: Jetpack Compose (Material 3) + ViewModel
+- 실제 해석된 버전: Firebase BoM 34.19.0 / firebase-ai 17.17.0 / AGP 8.11.2 / Kotlin 2.0.21 / Gradle 8.13 / minSdk 23 / compileSdk 36
 
 ## 완료 기준 (Definition of Done)
 1. Android 앱에서 마이크 입력을 캡처한다.
@@ -36,8 +38,90 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 한 번에 너무 많은 파일을 만들지 않는다 — Firebase 초기화 → 마이크 캡처 → API 연동 → 오디오 재생 순으로 작은 단위로 나눠서 진행하고, 매 단계마다 실행 가능한 상태를 유지한다.
 - 막히는 지점(권한 문제, SDK 호환성 등)이 생기면 임의로 우회하지 말고 문제를 보고한다.
 
-## 진행 로그
-(이 섹션은 진행하면서 계속 업데이트한다)
+## 개발 환경 · 재개 가이드
+컴퓨터를 껐다 켜거나 새 세션을 시작해도 여기서부터 바로 이어갈 수 있도록 적어둔다.
+아래 항목들은 모두 한 번씩 직접 부딪혀서 알아낸 것이다 — 다시 헤매지 않기 위한 기록이다.
+
+### 현재 위치
+- **Phase 0 완료** (음성 왕복 검증) → `## Phase 0 검증 결과` 참조
+- **Phase 1 진행 중** — S1(아키텍처), S3(대화 동작 튜닝), S2(통화 UX) 완료
+- **다음: S4 면책 고지** (이슈 #18, 규모 S)
+- 전체 계획과 상태는 이슈 #21
+
+### 검증 기기
+| 항목 | 값 |
+|---|---|
+| 기기 | Alldocube iPlay60 mini Pro |
+| OS | Android 14 / API 34 / arm64-v8a |
+| adb serial | `T812128GB24481134529` |
+| adb 경로 | `~/Library/Android/sdk/platform-tools/adb` |
+
+**에뮬레이터(`Pixel_2_API_30`)는 쓰지 않는다.** 이 머신에서 창이 검게만 보이고(호스트 GPU 문제, 이슈 #7) 스피커 출력도 호스트로 나오지 않는다(이슈 #8). 소프트웨어 렌더링으로 바꿔도 동일했다. 실기기가 유일하게 신뢰할 수 있는 검증 환경이다.
+
+### 빌드 · 설치 · 로그
+```bash
+ADB=~/Library/Android/sdk/platform-tools/adb
+SER=T812128GB24481134529
+
+./gradlew :app:assembleDebug
+$ADB -s $SER install -r app/build/outputs/apk/debug/app-debug.apk
+$ADB -s $SER shell am force-stop com.leo.voicecounselpoc
+$ADB -s $SER shell am start -n com.leo.voicecounselpoc/.MainActivity
+$ADB -s $SER logcat -s VoiceCounselPOC
+```
+
+### 화면을 직접 보지 않고 조작하기
+버튼 좌표를 UI 덤프에서 뽑아 탭한다. 화면 확인이 필요하면 `exec-out screencap`.
+```bash
+$ADB -s $SER shell uiautomator dump /sdcard/ui.xml
+$ADB -s $SER shell cat /sdcard/ui.xml | tr '>' '>\n' \
+  | grep -oE 'text="[^"]+"[^>]*bounds="[^"]+"'
+$ADB -s $SER shell input tap <x> <y>
+$ADB -s $SER exec-out screencap -p > screen.png
+```
+주의: 상태 텍스트 길이가 바뀌면 버튼 위치가 밀린다. 탭 직전에 다시 덤프할 것.
+
+### git push — ⚠️ 그냥 하면 403
+macOS 키체인에 오래된 GitHub 자격증명이 남아 있어 `git push` 가 403으로 막힌다.
+gh 토큰으로 우회한다(전역 설정을 바꾸지 않는 방식):
+```bash
+git -c credential.helper='!gh auth git-credential' push origin main
+```
+원격: https://github.com/chp320/poc-simni (public, 기본 브랜치 `main`)
+
+### 빌드 전 준비 (새 PC에서 clone 했다면)
+1. `app/google-services.json` 배치 — 커밋되지 않으므로 Firebase 콘솔에서 다시 받는다
+2. Firebase 콘솔에 **App Check 디버그 토큰 등록** — 토큰은 **기기마다 새로 생성**된다
+   ```bash
+   $ADB -s $SER logcat -d | grep "Firebase App Check debug token"
+   ```
+   이름 규칙: `{기기구분}-{용도}-{등록일자}` 예) `alldocube-iplay60-dev-20260913`
+3. 콘솔에서 AI Logic 활성화 + Firebase App Check API 활성화가 되어 있어야 한다
+
+### Android Studio 실행 버튼이 회색일 때
+`*.gradle.kts` / `libs.versions.toml` / `AndroidManifest.xml` 을 IDE 밖에서 고치면
+프로젝트 모델이 낡은 것으로 표시되어 실행이 잠긴다. `Sync Project with Gradle Files` 로 푼다.
+터미널 `./gradlew` 빌드는 IDE 모델을 갱신하지 않는다.
+
+### 통화 시간 상수 테스트
+30분 상한을 그대로 두면 검증에 30분이 걸린다. `AiConfig.Session` 값을 짧게 바꿔
+확인하고 **반드시 원복**한다. 원복 확인은 `git diff app/src/main/java/com/leo/voicecounselpoc/AiConfig.kt`.
+
+### 현재 소스 구조
+```
+app/src/main/java/com/leo/voicecounselpoc/
+├── MainActivity.kt        Firebase/App Check 초기화, 마이크 권한, 화면 그리기
+├── CallScreen.kt          통화 화면 (대기/연결 중/통화 중/오류)
+├── CallViewModel.kt       상태·로직 단일 소유자 (AndroidViewModel)
+├── CallUiState.kt         CallPhase, AppCheckStatus, CallNotice, CallUiState
+├── LiveSessionManager.kt  Live 세션 연결/대화, PublicPreviewAPI 를 이 파일에 가둠
+├── SystemInstruction.kt   상담 시스템 지시문
+├── AudioRecorder.kt       PCM 캡처 (현재 통화 경로에서 미사용, 저수준 작업용으로 보존)
+└── AiConfig.kt            모델명, 오디오 포맷, 턴 감지, 통화 시간 정책
+```
+
+## 진행 로그 — Phase 0 (완료)
+(Phase 1 진행 상황은 아래 `## Phase 1 구현 계획` 참조)
 - [x] Firebase 프로젝트 연결 및 SDK 의존성 추가
 - [x] 마이크 권한 요청 및 오디오 캡처 구현
 - [x] `liveModel` 초기화 및 세션 연결
@@ -92,6 +176,10 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - [ ] **끼어들기가 여전히 즉시 동작하는지** (S3 / 이슈 #22) — 2026-09-13 등록
   - `silenceDurationMs`를 3000ms로 늘리면서 턴 종료를 늦췄다. 이 작업이 끼어들기를 깨뜨렸을 수 있다.
   - 모델 발화 중 끊고 들어갔을 때 즉시 멈추는지 확인.
+
+**요청 이력** (같은 항목을 몇 번 미뤘는지 보이게 남긴다)
+- 2026-09-13 S2 시작 전 — 발화 환경이 안 되어 보류
+- 2026-09-13 S4 시작 전 — 보류, 다음에 다시 확인하기로 함
 
 ## Phase 1 구현 계획
 단계별 상세는 이슈 #21 에 있다. 각 단계 종료 시 앱은 실행 가능한 상태를 유지한다.
@@ -219,6 +307,8 @@ S1 아키텍처 ─→ S3 대화 동작 튜닝 ─→ S2 통화 UX ─┬→ S4 
 - 2026-09-13: 긴 침묵은 전사가 마지막으로 도착한 시각으로 판단한다 - SDK가 마이크를 내부에서 쓰기 때문에 진폭을 얻을 수 없다. 전사 도착 시각은 정확도가 떨어지지만 추가 마이크 접근 없이 구할 수 있는 유일한 신호다 (영향받는 항목: `CallViewModel.lastActivitySec`)
 - 2026-09-13: 29분 시점의 "AI가 마무리를 유도" 설계는 화면 표시로만 구현한다 - `sendTextRealtime()`으로 모델에게 마무리를 지시하면 그 지시문 자체를 사용자 발화처럼 읽고 예측 못 할 반응을 할 위험이 있다. 상담 앱에서 통제되지 않는 출력은 피하는 편이 낫다. 음성 개입 방식은 별도 검증 항목으로 남긴다 (영향받는 항목: `CallViewModel.startTimer`, 이슈 #20)
 - 2026-09-13: 통화 시간 정책을 `AiConfig.Session` 상수로 분리한다 - 30분 상한을 그대로 두면 검증에 30분이 걸린다. 상수로 두면 테스트 중 짧게 줄여 확인하고 되돌릴 수 있다. 실제로 45초/25초/35초/10초/20초로 줄여 3단계 경고와 두 종료 경로를 모두 검증했다 (영향받는 항목: `AiConfig.Session`)
+- 2026-09-13: CLAUDE.md에 `## 개발 환경 · 재개 가이드` 섹션을 만든다 - 세션이 끊기거나 컴퓨터를 껐다 켜면 기기 serial, git push 우회 방법, 에뮬레이터를 쓰지 않는 이유 같은 운영 정보가 사라져 같은 시행착오를 반복하게 된다. 실제로 오늘 하루에만 Gradle sync 문제, git 403, 에뮬레이터 검은 화면·오디오 실패로 시간을 썼다. 한 번씩 부딪혀 알아낸 것들을 재개 가능한 형태로 남긴다 (영향받는 항목: CLAUDE.md 구조)
+- 2026-09-13: 검증 대기 항목에 **요청 이력**을 함께 남긴다 - 같은 항목을 몇 번 미뤘는지 보이지 않으면 무한정 밀린다. 단계마다 요청한 사실과 보류 사유를 적어 누적을 드러낸다 (영향받는 항목: CLAUDE.md 검증 대기 섹션, 이슈 #23)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.
