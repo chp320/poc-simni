@@ -60,4 +60,5 @@ AI와 실시간 음성 대화(통화 느낌)를 나누는 Android 앱의 기술 
 - 2026-09-13: App Check 토큰을 `getAppCheckToken(false)`로 실제 한 번 요청한다 - 프로바이더 설치만으로는 콘솔 등록이 끝났는지 알 수 없다. 성공/실패 콜백으로 등록 완료 여부를 즉시 판별하고 화면과 Logcat에 동시에 남긴다 (영향받는 항목: `MainActivity.onCreate`)
 - 2026-09-13: `AndroidManifest.xml`에 `INTERNET` 권한을 추가한다 - App Check 토큰 교환과 이후 Gemini Live API 통신에 필수인데 Android Studio 템플릿에는 없었다 (영향받는 항목: `app/src/main/AndroidManifest.xml`)
 - 2026-09-13: 템플릿의 `Greeting`/`GreetingPreview` 컴포저블을 제거하고 단일 상태 표시 `Text`로 교체한다 - CLAUDE.md 금지사항에 따라 UI는 상태 표시만 두고 디자인 작업을 하지 않는다 (영향받는 항목: `MainActivity.kt`)
+- 2026-09-13: App Check 검증과 2단계(마이크 권한 + 오디오 캡처) 코드 배선은 Android Studio 에뮬레이터로 진행하고, Phase 0 최종 완료 기준(음성 왕복 1회 성공 + 체감 지연시간/한국어 품질 기록)은 Alldocube iPlay 60 mini Pro 실기기로 검증한다 - 배선 단계는 반복 실행이 잦아 에뮬레이터가 빠르고, 지연시간·마이크 품질·끼어들기 체감은 에뮬레이터(호스트 Mac 오디오 경유)에서 측정해도 의미가 없다. 에뮬레이터는 Google Play/Google APIs 시스템 이미지를 사용하고, 마이크 입력은 확장 설정에서 호스트 오디오 입력을 활성화해야 한다 (영향받는 항목: 진행 로그 2~5단계 검증 방식, 6단계 기록은 실기기 전용)
 - 2026-09-13: `.git` 디렉터리를 삭제하고 `git init`으로 재초기화한다 - 최초 커밋 `01d8b74`에 `google-services.json`(API 키 포함)이 들어가 있었고 remote가 없어 히스토리를 잃을 위험이 없다. 히스토리 재작성보다 단순하고 확실하다 (영향받는 항목: git 히스토리 전체, `.gitignore`)
