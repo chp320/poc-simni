@@ -1,0 +1,23 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.kotlin
+.externalNativeBuild
+.cxx
+local.properties
+
+# Firebase 설정 파일 — 절대 커밋하지 않는다 (CLAUDE.md 금지사항)
+google-services.json
+**/google-services.json
+.env
+*.keystore
+*.jks
