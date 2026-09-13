@@ -3,11 +3,11 @@ package com.leo.voicecounselpoc
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,263 +17,167 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.firebase.Firebase
 import com.google.firebase.appcheck.appCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.initialize
 import com.leo.voicecounselpoc.ui.theme.VoiceCounselPOCTheme
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 
 /**
- * Phase 0 / 1~5단계.
+ * Phase 1 / S1 — 아키텍처 정리.
  *
- * - App Check 디버그 프로바이더 등록 및 토큰 획득 (1단계)
- * - 마이크 런타임 권한 요청 + PCM 캡처, 진폭을 화면과 Logcat에 표시 (2단계)
+ * 상태와 로직은 [CallViewModel] 이 소유한다. 이 Activity 가 담당하는 것은 셋뿐이다:
+ * - Firebase / App Check 앱 수준 초기화
+ * - Context 가 필요한 일 (마이크 권한 확인·요청)
+ * - 화면 그리기
  *
- * - Live 세션 연결/해제 (3단계)
- * - 음성 대화: 송신·수신·스피커 재생 + 양쪽 전사 표시 (4~5단계)
+ * 화면 구성은 Phase 0 디버그 UI 그대로다. 통화 UX 교체는 S2에서 한다.
  */
 class MainActivity : ComponentActivity() {
 
-    private var appCheckStatus by mutableStateOf("App Check 토큰 요청 중…")
-    private var micStatus by mutableStateOf("마이크 대기 중")
-    private var isRecording by mutableStateOf(false)
-    private var amplitude by mutableIntStateOf(0)
+    private val viewModel: CallViewModel by viewModels()
 
-    private var recordJob: Job? = null
-
-    private val liveSession = LiveSessionManager()
-    private var sessionStatus by mutableStateOf("Live 세션: 미연결")
-    private var isSessionConnected by mutableStateOf(false)
-    private var isSessionBusy by mutableStateOf(false)
-
-    private var isConversing by mutableStateOf(false)
-    private var lastInputTranscript by mutableStateOf("")
-    private var lastOutputTranscript by mutableStateOf("")
-    private var conversationJob: Job? = null
+    /** 권한 팝업이 뜬 이유. 허용된 뒤 무엇을 이어서 할지 기억해 둔다. */
+    private var pendingMicAction: (() -> Unit)? = null
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
-                startRecording()
+                pendingMicAction?.invoke()
             } else {
-                micStatus = "마이크 권한이 거부되었습니다. 설정에서 허용 후 다시 시도하세요."
-                Log.w(TAG, "RECORD_AUDIO 권한 거부됨")
+                viewModel.onMicPermissionDenied()
             }
+            pendingMicAction = null
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // App Check 설치는 앱 수준 설정이라 Activity 에 둔다.
+        // 토큰 요청과 그 결과 상태는 ViewModel 이 관리한다.
         Firebase.initialize(context = this)
         Firebase.appCheck.installAppCheckProviderFactory(
             DebugAppCheckProviderFactory.getInstance()
         )
-        Firebase.appCheck.getAppCheckToken(false)
-            .addOnSuccessListener {
-                Log.i(TAG, "App Check 토큰 획득 성공 — 디버그 토큰이 콘솔에 등록되어 있다.")
-                appCheckStatus = "✅ App Check OK"
-            }
-            .addOnFailureListener { e ->
-                Log.w(TAG, "App Check 토큰 획득 실패 — 콘솔에 디버그 토큰을 등록해야 한다.", e)
-                appCheckStatus = "❌ App Check 실패: ${e.message}"
-            }
+        viewModel.verifyAppCheck()
 
         enableEdgeToEdge()
         setContent {
             VoiceCounselPOCTheme {
+                val state by viewModel.uiState.collectAsStateWithLifecycle()
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(
+                    DebugScreen(
+                        state = state,
+                        onToggleSession = viewModel::toggleSession,
+                        onToggleConversation = ::onToggleConversation,
+                        onToggleMicProbe = ::onToggleMicProbe,
                         modifier = Modifier
                             .padding(innerPadding)
                             .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text(appCheckStatus)
-
-                        Text(sessionStatus)
-                        Button(onClick = ::onToggleSession, enabled = !isSessionBusy) {
-                            Text(if (isSessionConnected) "세션 해제" else "세션 연결")
-                        }
-
-                        Button(
-                            onClick = ::onToggleConversation,
-                            enabled = isSessionConnected && !isSessionBusy
-                        ) {
-                            Text(if (isConversing) "대화 종료" else "🎙 대화 시작")
-                        }
-
-                        if (lastInputTranscript.isNotBlank()) {
-                            Text("[내 말] $lastInputTranscript")
-                        }
-                        if (lastOutputTranscript.isNotBlank()) {
-                            Text("[모델] $lastOutputTranscript")
-                        }
-
-                        Text(micStatus)
-
-                        Button(onClick = ::onToggleRecording) {
-                            Text(if (isRecording) "녹음 정지" else "녹음 시작")
-                        }
-
-                        Text("진폭: $amplitude / ${AudioRecorder.MAX_AMPLITUDE}")
-                        LinearProgressIndicator(
-                            progress = { amplitude.toFloat() / AudioRecorder.MAX_AMPLITUDE },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                    )
                 }
             }
         }
     }
 
-    private fun onToggleSession() {
-        if (isSessionBusy) return
-        lifecycleScope.launch {
-            isSessionBusy = true
-            try {
-                if (isSessionConnected) {
-                    liveSession.disconnect()
-                    isSessionConnected = false
-                    sessionStatus = "Live 세션: 해제됨"
-                } else {
-                    sessionStatus = "Live 세션: 연결 중… (${AiConfig.LIVE_MODEL_NAME})"
-                    liveSession.connect(AiConfig.LIVE_MODEL_NAME)
-                    isSessionConnected = true
-                    sessionStatus = "✅ Live 세션 연결됨 (${AiConfig.LIVE_MODEL_NAME})"
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Live 세션 오류", e)
-                isSessionConnected = false
-                sessionStatus = "❌ 연결 실패: ${e.message}"
-            } finally {
-                isSessionBusy = false
-            }
-        }
-    }
+    // ---- 권한이 필요한 동작 ------------------------------------------------
 
     private fun onToggleConversation() {
-        if (isConversing) {
-            liveSession.stopConversation()
-            conversationJob?.cancel()
-            conversationJob = null
-            isConversing = false
-            micStatus = "대화 종료됨"
-            return
+        if (viewModel.uiState.value.isInCall) {
+            viewModel.stopConversation()
+        } else {
+            withMicPermission { viewModel.startConversation() }
         }
+    }
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
+    private fun onToggleMicProbe() {
+        if (viewModel.uiState.value.micProbe.isRecording) {
+            viewModel.stopMicProbe()
+        } else {
+            withMicPermission { viewModel.startMicProbe() }
+        }
+    }
+
+    /** 권한이 있으면 바로 실행하고, 없으면 요청 후 허용됐을 때 실행한다. */
+    private fun withMicPermission(action: () -> Unit) {
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+            action()
+        } else {
+            pendingMicAction = action
             requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
-            return
         }
-
-        isConversing = true
-        micStatus = "🎙 대화 중 — 말해보세요"
-        lastInputTranscript = ""
-        lastOutputTranscript = ""
-
-        conversationJob = lifecycleScope.launch {
-            try {
-                liveSession.startConversation { input, output ->
-                    if (input != null) lastInputTranscript = input
-                    if (output != null) lastOutputTranscript = output
-                }
-                // startAudioConversation() 은 시작만 하고 즉시 반환한다.
-                // 대화는 stopConversation() 을 부를 때까지 계속된다.
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "음성 대화 실패", e)
-                micStatus = "❌ 대화 실패: ${e.message}"
-                isConversing = false
-            }
-        }
-    }
-
-    private fun onToggleRecording() {
-        when {
-            isRecording -> stopRecording()
-
-            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED -> startRecording()
-
-            else -> requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
-    private fun startRecording() {
-        if (isRecording) return
-        isRecording = true
-        micStatus = "🎙 녹음 중 — 말해보세요"
-        Log.i(TAG, "오디오 캡처 시작 (${AudioRecorder.SAMPLE_RATE}Hz / 16-bit / mono)")
-
-        var chunkCount = 0
-        recordJob = lifecycleScope.launch {
-            try {
-                AudioRecorder().start().collect { chunk ->
-                    amplitude = chunk.peakAmplitude
-                    // 청크는 100ms마다 오므로 로그는 약 0.5초에 한 번만 남긴다.
-                    if (chunkCount++ % 5 == 0) {
-                        Log.d(TAG, "진폭=${chunk.peakAmplitude} (청크 ${chunk.pcm.size}바이트)")
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "오디오 캡처 실패", e)
-                micStatus = "캡처 실패: ${e.message}"
-                isRecording = false
-                amplitude = 0
-            }
-        }
-    }
-
-    private fun stopRecording() {
-        recordJob?.cancel()
-        recordJob = null
-        isRecording = false
-        amplitude = 0
-        micStatus = "마이크 정지됨"
-        Log.i(TAG, "오디오 캡처 정지")
     }
 
     override fun onStop() {
         super.onStop()
-        // 화면을 벗어나면 마이크를 놓아준다. Phase 0은 포그라운드 전용이다.
-        if (isRecording) stopRecording()
-        if (isConversing) {
-            liveSession.stopConversation()
-            conversationJob?.cancel()
-            conversationJob = null
-            isConversing = false
-        }
+        // 화면을 벗어나면 마이크 검증용 캡처는 놓아준다.
+        // Live 세션은 유지한다 — 화면 회전으로도 onStop 이 호출되기 때문이다.
+        viewModel.stopMicProbe()
     }
+}
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // lifecycleScope 는 이 시점에 이미 취소되므로 별도 스코프에서 정리한다.
-        if (liveSession.isConnected) {
-            CoroutineScope(Dispatchers.IO).launch { liveSession.disconnect() }
+/** Phase 0 디버그 화면. S2에서 통화 UI로 교체된다. */
+@Composable
+private fun DebugScreen(
+    state: CallUiState,
+    onToggleSession: () -> Unit,
+    onToggleConversation: () -> Unit,
+    onToggleMicProbe: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(
+            when (val check = state.appCheck) {
+                AppCheckStatus.Checking -> "App Check 토큰 요청 중…"
+                AppCheckStatus.Ok -> "✅ App Check OK"
+                is AppCheckStatus.Failed -> "❌ App Check 실패: ${check.message}"
+            }
+        )
+
+        Text(
+            when (val phase = state.phase) {
+                CallPhase.Idle -> "Live 세션: 미연결"
+                CallPhase.Connecting -> "Live 세션: 연결 중… (${AiConfig.LIVE_MODEL_NAME})"
+                CallPhase.Connected -> "✅ Live 세션 연결됨 (${AiConfig.LIVE_MODEL_NAME})"
+                CallPhase.InCall -> "🎙 대화 중 — 말해보세요"
+                is CallPhase.Failed -> "❌ ${phase.message}"
+            }
+        )
+
+        Button(onClick = onToggleSession, enabled = !state.isTransitioning) {
+            Text(if (state.isSessionOpen) "세션 해제" else "세션 연결")
         }
-    }
 
-    companion object {
-        private const val TAG = "VoiceCounselPOC"
+        Button(
+            onClick = onToggleConversation,
+            enabled = state.isSessionOpen && !state.isTransitioning,
+        ) {
+            Text(if (state.isInCall) "대화 종료" else "🎙 대화 시작")
+        }
+
+        if (state.inputTranscript.isNotBlank()) Text("[내 말] ${state.inputTranscript}")
+        if (state.outputTranscript.isNotBlank()) Text("[모델] ${state.outputTranscript}")
+
+        Text(state.micProbe.message)
+
+        Button(onClick = onToggleMicProbe) {
+            Text(if (state.micProbe.isRecording) "녹음 정지" else "녹음 시작")
+        }
+
+        Text("진폭: ${state.micProbe.amplitude} / ${AudioRecorder.MAX_AMPLITUDE}")
+        LinearProgressIndicator(
+            progress = { state.micProbe.amplitude.toFloat() / AudioRecorder.MAX_AMPLITUDE },
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
