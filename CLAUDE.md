@@ -108,7 +108,7 @@ S1 아키텍처 ─→ S3 대화 동작 튜닝 ─→ S2 통화 UX ─┬→ S4 
 
 - [x] S1 아키텍처 정리
 - [x] S3 대화 동작 튜닝 — 턴 감지(#22) + 시스템 지시문(#16)
-- [ ] S2 통화 UX (#20)
+- [x] S2 통화 UX (#20)
 - [ ] S4 면책 고지 (#18)
 - [ ] S5 위기 대응 (#17)
 - [ ] S6 데이터 저장 (#19)
@@ -215,6 +215,10 @@ S1 아키텍처 ─→ S3 대화 동작 튜닝 ─→ S2 통화 UX ─┬→ S4 
 - 2026-09-13: 턴 종료 침묵 임계값을 **3000ms**로 확정한다 (S3 / 이슈 #22) - 실기기 튜닝 결과 1500ms와 2000ms 모두 부족했다. "음.. 지금 시각은 4시 32분..(3초) 입니다"에서 '입니다' 전에 응답이 시작됐다. 3000ms에서 끊김이 사라졌다. 짧은 답변 후 3초 정적이라는 트레이드오프가 있으나, 상담 맥락에서는 기다려주는 어색함보다 끊기는 불쾌함이 크다는 판단을 따른다. 튜닝 이력은 `AiConfig.TurnDetection` 주석에 남겼다 (영향받는 항목: `AiConfig.TurnDetection.SILENCE_DURATION_MS`)
 - 2026-09-13: 시스템 지시문을 `SystemInstruction.kt`로 분리한다 - 문구를 자주 고치며 대화 품질을 비교해야 하는데, `LiveSessionManager`에 인라인으로 두면 세션 로직과 뒤섞인다. 지시문만 고칠 때 세션 코드를 건드리지 않아도 된다 (영향받는 항목: `SystemInstruction.kt`, `LiveSessionManager.connect`)
 - 2026-09-13: `activityHandling`을 `INTERRUPT`로 **명시**한다 - 기본값에 맡기지 않는다. `NO_INTERRUPT`가 되면 Phase 0에서 확인한 "끼어들기 즉시 중단"이 죽는다. 턴 종료를 늦추는 작업(`endSensitivity = LOW`)과 끼어들기 유지(`startSensitivity = HIGH`)는 서로 반대 방향이라, 하나를 고치다 다른 하나가 깨지지 않도록 둘 다 명시적으로 고정했다 (영향받는 항목: `LiveSessionManager`의 `realtimeInputConfig`)
+- 2026-09-13: 통화 중 마이크 뮤트는 `AudioManager.setMicrophoneMute()`로 구현한다 - `startAudioConversation()`이 마이크를 SDK 내부에서 잡고 있어 뮤트 API가 없다. 세션을 껐다 켜는 방식은 대화 맥락이 끊길 위험이 있다. Context가 필요해 `CallViewModel`이 `AndroidViewModel`이 되었고 `MODIFY_AUDIO_SETTINGS` 권한(설치 시 자동 승인)을 매니페스트에 추가했다. 실기기 `dumpsys audio`에서 `FromApi=true` 확인 (영향받는 항목: `CallViewModel`, `AndroidManifest.xml`)
+- 2026-09-13: 긴 침묵은 전사가 마지막으로 도착한 시각으로 판단한다 - SDK가 마이크를 내부에서 쓰기 때문에 진폭을 얻을 수 없다. 전사 도착 시각은 정확도가 떨어지지만 추가 마이크 접근 없이 구할 수 있는 유일한 신호다 (영향받는 항목: `CallViewModel.lastActivitySec`)
+- 2026-09-13: 29분 시점의 "AI가 마무리를 유도" 설계는 화면 표시로만 구현한다 - `sendTextRealtime()`으로 모델에게 마무리를 지시하면 그 지시문 자체를 사용자 발화처럼 읽고 예측 못 할 반응을 할 위험이 있다. 상담 앱에서 통제되지 않는 출력은 피하는 편이 낫다. 음성 개입 방식은 별도 검증 항목으로 남긴다 (영향받는 항목: `CallViewModel.startTimer`, 이슈 #20)
+- 2026-09-13: 통화 시간 정책을 `AiConfig.Session` 상수로 분리한다 - 30분 상한을 그대로 두면 검증에 30분이 걸린다. 상수로 두면 테스트 중 짧게 줄여 확인하고 되돌릴 수 있다. 실제로 45초/25초/35초/10초/20초로 줄여 3단계 경고와 두 종료 경로를 모두 검증했다 (영향받는 항목: `AiConfig.Session`)
 
 ## 향후 과제
 Phase 0 범위 밖이지만 이후 단계에서 다뤄야 할 항목을 적어둔다. 여기서 해결하지 않고 언급만 남긴다.

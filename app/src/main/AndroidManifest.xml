@@ -8,6 +8,10 @@
     <!-- 마이크 입력 캡처 (런타임 권한 요청 필요) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- 통화 중 마이크 뮤트. SDK 가 마이크를 내부에서 잡고 있어
+         AudioManager.setMicrophoneMute() 로 처리한다 (설치 시 자동 승인) -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
