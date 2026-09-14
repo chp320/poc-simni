@@ -36,6 +36,37 @@ object AiConfig {
          * false 로 두면 SDK 기본 동작(미디어 경로)으로 돌아간다 — 효과 비교용 스위치다.
          */
         const val USE_COMMUNICATION_ROUTE = true
+
+        /**
+         * true 면 오디오를 [DirectAudioEngine] 이 직접 처리하고 서버 메시지를 앱이 직접 받는다 (이슈 #34 A안).
+         * 재개 핸들을 받아 약 10분 연결 수명을 넘겨 통화를 이어갈 수 있다.
+         *
+         * false 면 SDK `startAudioConversation()` 경로로 돌아간다 — 새 경로에 문제가 생겼을 때의 되돌림용이다.
+         */
+        const val USE_DIRECT_AUDIO = true
+    }
+
+    /**
+     * 긴 통화 설정 (이슈 #34). [Audio.USE_DIRECT_AUDIO] 경로에서만 쓰인다.
+     *
+     * Live API 제한 (Firebase 문서, 2026-09-14 확인):
+     * - 연결 약 10분 — 실측 589초. 종료 약 50초 전에 going away 가 **2번** 온다
+     * - 오디오 전용 세션 15분, 컨텍스트 128k 토큰 → 맥락 압축으로 넘긴다
+     */
+    object LongCall {
+
+        /**
+         * 대화 맥락이 이 토큰 수를 넘으면 서버가 오래된 부분을 줄이기 시작한다.
+         *
+         * 줄어든 부분은 모델이 잊는다. 문서 예시(10,000)는 몇 분 만에 초반 대화를 잊어 상담에
+         * 부적합하다. 128k 한도 안에서 최대한 오래 기억하도록 높게 잡았다.
+         *
+         * ⚠️ SDK 가 토큰 사용량을 알려주지 않아 실측할 수 없다. 15분 넘는 통화로 동작을 보고 조정한다.
+         */
+        const val COMPRESSION_TRIGGER_TOKENS = 100_000
+
+        /** 압축 후 남길 맥락의 크기. */
+        const val COMPRESSION_TARGET_TOKENS = 60_000
     }
 
     /**

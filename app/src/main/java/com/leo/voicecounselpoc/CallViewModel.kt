@@ -1,5 +1,6 @@
 package com.leo.voicecounselpoc
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -115,6 +116,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // RECORD_AUDIO 권한은 MainActivity.onStartCall 에서 확인한 뒤에만 startCall 이 불린다.
+    @SuppressLint("MissingPermission")
     private fun startConversation() {
         lastActivitySec = 0
         lastUserSpeechSec = -1
@@ -144,6 +147,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         }
                     },
+                    // 직접 오디오 경로는 going away 를 받으면 스스로 재연결하고(이슈 #34),
+                    // 이어 붙일 수 없을 때만 여기로 온다. SDK 경로는 늘 여기로 온다.
                     onGoAway = { timeLeft ->
                         Log.w(TAG, "서버 종료 통지 수신 — 경과 ${_uiState.value.elapsedSeconds}초, timeLeft=$timeLeft")
                         endCall("서버에서 연결을 종료했어요.")
