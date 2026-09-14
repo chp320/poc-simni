@@ -1,7 +1,9 @@
 package com.leo.voicecounselpoc
 
 import android.app.Application
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -30,6 +32,9 @@ import kotlinx.coroutines.launch
  * `AudioManager.setMicrophoneMute()` 로 처리해야 하고, 여기에 Context 가 필요하다.
  *
  * 권한 확인·요청은 여전히 Activity 에 남긴다.
+ *
+ * 화면 잠김·다른 앱 전환 중에도 통화를 유지하는 [CallService] 는 유지 역할만 한다 (B1, 이슈 #13).
+ * 세션은 여전히 여기서 소유하므로, 시스템이 Activity 를 파괴해 이 ViewModel 이 정리되면 통화도 끝난다.
  */
 class CallViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -116,6 +121,12 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
         lastModelReplySec = -1
         _uiState.update { it.copy(phase = CallPhase.InCall, elapsedSeconds = 0) }
 
+        // SDK 가 AudioRecord/AudioTrack 을 만들기 전에 통화 모드로 들어가야 한다.
+        enterCommunicationAudio()
+        // 화면이 꺼지거나 다른 앱으로 가도 마이크를 유지한다 (이슈 #13).
+        // 사용자가 버튼을 누른 직후라 앱이 화면에 보이는 상태에서 시작된다.
+        CallService.start(getApplication())
+
         conversationJob = viewModelScope.launch {
             try {
                 liveSession.startConversation(
@@ -143,6 +154,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "음성 대화 실패", e)
+                exitCommunicationAudio()
+                CallService.stop(getApplication())
                 _uiState.update {
                     it.copy(phase = CallPhase.Failed(e.message ?: "대화를 시작하지 못했습니다"))
                 }
@@ -159,6 +172,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
         timerJob?.cancel(); timerJob = null
         conversationJob?.cancel(); conversationJob = null
         setMuted(false)
+        exitCommunicationAudio()
+        CallService.stop(getApplication())
 
         viewModelScope.launch {
             liveSession.stopConversation()
@@ -259,6 +274,75 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(isMuted = muted) }
     }
 
+    // ---- 오디오 경로 (이슈 #12) --------------------------------------------
+
+    /** 통화 모드로 들어가기 전의 오디오 모드. null 이면 통화 모드가 아니다. */
+    private var previousAudioMode: Int? = null
+
+    /**
+     * 통화 중에만 `MODE_IN_COMMUNICATION` 으로 전환하고 출력 장치를 고른다.
+     *
+     * 통화 모드에서 폰은 기본적으로 수화부(귀에 대는 곳)로 소리를 낸다. 화면을 보며 쓰는 앱이라
+     * 이어폰이 없으면 스피커로 보낸다. 이어폰이 있으면 이어폰으로 보낸다 — 블루투스는 통화
+     * 프로필(SCO)로 바뀌어 음질은 떨어지지만 이어폰 마이크를 쓰게 된다 (이슈 #27).
+     */
+    private fun enterCommunicationAudio() {
+        if (!AiConfig.Audio.USE_COMMUNICATION_ROUTE || previousAudioMode != null) return
+
+        runCatching {
+            previousAudioMode = audioManager.mode
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val candidates = audioManager.availableCommunicationDevices
+                val target = HEADSET_TYPES.firstNotNullOfOrNull { type -> candidates.firstOrNull { it.type == type } }
+                    ?: candidates.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                val applied = target != null && audioManager.setCommunicationDevice(target)
+                Log.i(
+                    TAG,
+                    "오디오 경로 — mode=IN_COMMUNICATION, 선택=${target?.let(::deviceName)}, 적용=$applied, " +
+                        "후보=${candidates.joinToString { deviceName(it) }}"
+                )
+            } else {
+                // API 30 이하는 검증 기기가 없어 실측하지 못했다. 블루투스 SCO 는 startBluetoothSco() 가
+                // 따로 필요해 여기서는 다루지 않는다.
+                val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                val hasHeadset = outputs.any { it.type in HEADSET_TYPES }
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = !hasHeadset
+                Log.i(TAG, "오디오 경로 — mode=IN_COMMUNICATION, 스피커=${!hasHeadset} (API ${Build.VERSION.SDK_INT})")
+            }
+        }.onFailure { Log.w(TAG, "오디오 경로 전환 실패", it) }
+    }
+
+    /** 통화 모드를 풀고 원래 모드로 돌린다. 통화 모드가 아니면 아무것도 하지 않는다. */
+    private fun exitCommunicationAudio() {
+        val previous = previousAudioMode ?: return
+        previousAudioMode = null
+
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = false
+            }
+            audioManager.mode = previous
+            Log.i(TAG, "오디오 경로 복구 — mode=$previous")
+        }.onFailure { Log.w(TAG, "오디오 경로 복구 실패", it) }
+    }
+
+    private fun deviceName(device: AudioDeviceInfo): String = when (device.type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "스피커"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "수화부"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "유선헤드셋"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "유선이어폰"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB헤드셋"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "블루투스SCO(${device.productName})"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "BLE헤드셋(${device.productName})"
+        else -> "type${device.type}"
+    }
+
     // ---- 마이크 단독 검증 (개발용) ----------------------------------------
 
     fun startMicProbe() {
@@ -303,6 +387,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         runCatching { audioManager.isMicrophoneMute = false }
+        exitCommunicationAudio()
+        CallService.stop(getApplication())
         // viewModelScope 는 이 시점에 이미 취소되므로 별도 스코프에서 정리한다.
         if (liveSession.isConnected) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
@@ -314,5 +400,14 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val TAG = "VoiceCounselPOC"
+
+        /** 통화 출력으로 스피커보다 먼저 고르는 장치. 앞에 있을수록 우선한다. */
+        private val HEADSET_TYPES = listOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+        )
     }
 }

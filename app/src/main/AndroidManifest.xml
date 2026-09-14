@@ -12,6 +12,15 @@
          AudioManager.setMicrophoneMute() 로 처리한다 (설치 시 자동 승인) -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- 화면 잠김·다른 앱 전환 중에도 통화 유지 (이슈 #13).
+         보이지 않는 앱은 마이크가 막히므로 마이크 타입 포그라운드 서비스로 붙잡는다.
+         FOREGROUND_SERVICE_MICROPHONE 은 Android 14 부터 필수 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- "통화 중" 알림 (Android 13+ 런타임 권한). 거부해도 통화는 된다 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -21,10 +30,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.VoiceCounselPOC">
+        <!-- singleTop: 알림 탭·"통화 종료"가 새 화면을 만들지 않고 기존 화면의 onNewIntent 로 온다.
+             새 화면이 생기면 새 ViewModel 이 붙어 진행 중인 통화를 보지 못한다 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.VoiceCounselPOC">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -32,6 +44,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 
 </manifest>

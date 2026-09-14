@@ -20,6 +20,25 @@ object AiConfig {
     const val AUDIO_SAMPLE_RATE_HZ = 24_000
 
     /**
+     * 오디오 경로 설정 (이슈 #12 되먹임 해결 1단계).
+     *
+     * SDK 는 마이크를 `VOICE_COMMUNICATION` 으로 잡고 `AcousticEchoCanceler` 도 켜지만,
+     * 스피커 출력은 `USAGE_MEDIA` 로 하드코딩되어 있다. 에코 캔슬러가 지워야 할 소리가
+     * 미디어 경로로 나가서 제대로 참조하지 못하고, Galaxy S26 스피커에서 모델이 자기 목소리에
+     * 끼어드는 루프가 생겼다.
+     */
+    object Audio {
+
+        /**
+         * true 면 출력을 `USAGE_VOICE_COMMUNICATION` 으로 바꾸고 통화 중에만
+         * `MODE_IN_COMMUNICATION` 으로 전환한다. 입력과 출력이 모두 통화 경로에 올라간다.
+         *
+         * false 로 두면 SDK 기본 동작(미디어 경로)으로 돌아간다 — 효과 비교용 스위치다.
+         */
+        const val USE_COMMUNICATION_ROUTE = true
+    }
+
+    /**
      * 턴 종료 판단 설정 (이슈 #22).
      *
      * Phase 0에서 "말하다 생각하려고 잠깐 멈추면 모델이 바로 응답을 시작한다"는 문제가 있었다.

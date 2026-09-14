@@ -1,5 +1,6 @@
 package com.leo.voicecounselpoc
 
+import android.media.AudioAttributes
 import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -105,11 +106,24 @@ class LiveSessionManager {
     ) {
         val open = checkNotNull(session) { "세션이 연결되지 않았습니다. connect() 를 먼저 호출하세요." }
 
-        Log.i(TAG, "음성 대화 시작 (끼어들기 활성화)")
+        Log.i(TAG, "음성 대화 시작 (끼어들기 활성화, 통화 경로=${AiConfig.Audio.USE_COMMUNICATION_ROUTE})")
         open.startAudioConversation(
             liveAudioConversationConfig {
                 // Phase 0 완료 기준에 끼어들기 동작 확인이 포함되어 있다.
                 enableInterruptions = true
+                // 이슈 #12: SDK 는 출력을 USAGE_MEDIA 로 만든다. build() 직전에 불리므로
+                // 여기서 덮어쓰면 출력이 통화 경로로 가고 에코 캔슬러가 스피커 소리를 참조할 수 있다.
+                // 오디오 모드 전환(MODE_IN_COMMUNICATION)은 CallViewModel 이 맡는다.
+                if (AiConfig.Audio.USE_COMMUNICATION_ROUTE) {
+                    initializationHandler = { _, trackBuilder ->
+                        trackBuilder.setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                    }
+                }
                 transcriptHandler = { input, output ->
                     val inputText = input?.text?.takeIf { it.isNotBlank() }
                     val outputText = output?.text?.takeIf { it.isNotBlank() }
