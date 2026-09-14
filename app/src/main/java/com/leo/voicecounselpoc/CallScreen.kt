@@ -23,6 +23,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,11 +50,12 @@ fun CallScreen(
     onEndCall: () -> Unit,
     onToggleMute: () -> Unit,
     onDismissError: () -> Unit,
+    onShowDisclaimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when (state.phase) {
-            CallPhase.Idle -> IdleContent(state, onStartCall)
+            CallPhase.Idle -> IdleContent(state, onStartCall, onShowDisclaimer)
             CallPhase.Connecting -> {
                 KeepScreenOn()
                 ConnectingContent()
@@ -85,7 +88,7 @@ private fun KeepScreenOn() {
 // ---- 대기 -----------------------------------------------------------------
 
 @Composable
-private fun IdleContent(state: CallUiState, onStartCall: () -> Unit) {
+private fun IdleContent(state: CallUiState, onStartCall: () -> Unit, onShowDisclaimer: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp),
@@ -104,6 +107,9 @@ private fun IdleContent(state: CallUiState, onStartCall: () -> Unit) {
         }
 
         Disclaimer(short = true)
+
+        // 면책 고지 전체판을 언제든 다시 볼 수 있어야 한다 (#18). 설정 화면이 생기면 옮긴다.
+        TextButton(onClick = onShowDisclaimer) { Text("이 앱에 대해") }
 
         // App Check 가 실패하면 통화 자체가 불가능하므로 미리 알린다.
         if (state.appCheck is AppCheckStatus.Failed) {
@@ -182,6 +188,27 @@ private fun InCallContent(
             if (state.inputTranscript.isNotBlank()) Text("[내 말] ${state.inputTranscript}")
             if (state.outputTranscript.isNotBlank()) Text("[모델] ${state.outputTranscript}")
         }
+
+        Spacer(Modifier.height(8.dp))
+        HelplineBanner()
+    }
+}
+
+/**
+ * 통화 중 하단 상담전화 배너 (#18). 탭하면 전화 앱에 109 가 입력된 채 열린다.
+ *
+ * 조용하게 둔다 — 상담 중 계속 눈에 띄면 위기로 몰아가는 느낌을 준다. 위기 감지 시 강조되는
+ * 단계별 안내는 S5(#17)에서 붙인다.
+ */
+@Composable
+private fun HelplineBanner() {
+    val context = LocalContext.current
+    TextButton(onClick = { openDialer(context, "109") }) {
+        Text(
+            "힘들 땐 자살예방상담 109 (24시간)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
     }
 }
 
@@ -262,7 +289,7 @@ private fun Pulse(active: Boolean = true) {
  * 법률 문구처럼 차갑게 쓰지 않는다. 힘들 때 여는 앱이라 첫 화면이 경고문 같으면
  * 그 자체가 진입장벽이 된다. 다만 "전문 상담을 대체하지 않는다"는 흐리지 않는다.
  *
- * 전체판과 동의 절차는 S4 에서 붙인다.
+ * 여기는 짧은판과 연결 중 안내다. 전체판은 [DisclaimerScreen].
  */
 @Composable
 private fun Disclaimer(short: Boolean) {
@@ -290,7 +317,7 @@ private fun Disclaimer(short: Boolean) {
             textAlign = TextAlign.Center,
         )
         Text(
-            "대화 내용은 AI 처리를 위해 외부로 전송돼요.",
+            "대화 음성은 AI 처리를 위해 Google 서버로 전송돼요.",
             style = MaterialTheme.typography.bodySmall,
             color = muted,
             textAlign = TextAlign.Center,

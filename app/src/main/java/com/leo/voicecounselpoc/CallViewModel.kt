@@ -45,6 +45,24 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
     private val _uiState = MutableStateFlow(CallUiState())
     val uiState: StateFlow<CallUiState> = _uiState.asStateFlow()
 
+    /**
+     * 면책 고지 전체판을 확인했는지 (이슈 #18). 최초 실행 때 한 번만 받는다.
+     *
+     * [CallUiState] 에 넣지 않은 이유: 통화를 시작·종료할 때마다 [CallUiState] 를 새로 만드는데,
+     * 그때마다 이 값을 챙겨 옮기다 빠뜨리면 통화 뒤에 고지 화면이 다시 뜬다. 수명이 다른 값이라 따로 둔다.
+     *
+     * 저장하는 것은 이 true/false 하나다. 백업은 이미 전부 막혀 있다(allowBackup=false).
+     */
+    private val prefs = app.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
+    private val _disclaimerAccepted = MutableStateFlow(prefs.getBoolean(KEY_DISCLAIMER_ACCEPTED, false))
+    val disclaimerAccepted: StateFlow<Boolean> = _disclaimerAccepted.asStateFlow()
+
+    fun acceptDisclaimer() {
+        prefs.edit().putBoolean(KEY_DISCLAIMER_ACCEPTED, true).apply()
+        _disclaimerAccepted.value = true
+        Log.i(TAG, "면책 고지 확인됨")
+    }
+
     private var conversationJob: Job? = null
     private var timerJob: Job? = null
     private var micProbeJob: Job? = null
@@ -405,6 +423,8 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val TAG = "VoiceCounselPOC"
+        private const val PREFS_NAME = "app"
+        private const val KEY_DISCLAIMER_ACCEPTED = "disclaimer_accepted"
 
         /** 통화 출력으로 스피커보다 먼저 고르는 장치. 앞에 있을수록 우선한다. */
         private val HEADSET_TYPES = listOf(

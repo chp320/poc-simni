@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,6 +68,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             VoiceCounselPOCTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
+                val disclaimerAccepted by viewModel.disclaimerAccepted.collectAsStateWithLifecycle()
+                // 대기 화면 "이 앱에 대해"로 연 전체판. 화면 회전에도 유지되도록 rememberSaveable.
+                var reviewingDisclaimer by rememberSaveable { mutableStateOf(false) }
 
                 // 통화 중 뒤로가기는 앱을 닫지 않고 백그라운드로 보낸다. 화면이 끝나면 ViewModel 과 함께
                 // 통화도 끊기기 때문이다 (B1, 이슈 #13). 종료는 버튼이나 알림에서만 한다.
@@ -72,15 +78,36 @@ class MainActivity : ComponentActivity() {
                     moveTaskToBack(true)
                 }
 
+                // 다시 보기 중 뒤로가기는 고지 화면만 닫는다.
+                BackHandler(enabled = disclaimerAccepted && reviewingDisclaimer) {
+                    reviewingDisclaimer = false
+                }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CallScreen(
-                        state = state,
-                        onStartCall = ::onStartCall,
-                        onEndCall = viewModel::endCall,
-                        onToggleMute = viewModel::toggleMute,
-                        onDismissError = viewModel::dismissError,
-                        modifier = Modifier.padding(innerPadding),
-                    )
+                    when {
+                        // 최초 실행: 확인하기 전에는 통화 화면으로 가지 않는다 (#18).
+                        !disclaimerAccepted -> DisclaimerScreen(
+                            confirmLabel = "확인했습니다",
+                            onConfirm = viewModel::acceptDisclaimer,
+                            modifier = Modifier.padding(innerPadding),
+                        )
+
+                        reviewingDisclaimer -> DisclaimerScreen(
+                            confirmLabel = "닫기",
+                            onConfirm = { reviewingDisclaimer = false },
+                            modifier = Modifier.padding(innerPadding),
+                        )
+
+                        else -> CallScreen(
+                            state = state,
+                            onStartCall = ::onStartCall,
+                            onEndCall = viewModel::endCall,
+                            onToggleMute = viewModel::toggleMute,
+                            onDismissError = viewModel::dismissError,
+                            onShowDisclaimer = { reviewingDisclaimer = true },
+                            modifier = Modifier.padding(innerPadding),
+                        )
+                    }
                 }
             }
         }
