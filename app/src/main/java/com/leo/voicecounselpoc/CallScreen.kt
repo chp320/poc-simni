@@ -24,12 +24,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
@@ -51,10 +53,32 @@ fun CallScreen(
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when (state.phase) {
             CallPhase.Idle -> IdleContent(state, onStartCall)
-            CallPhase.Connecting -> ConnectingContent()
-            CallPhase.Connected, CallPhase.InCall -> InCallContent(state, onEndCall, onToggleMute)
+            CallPhase.Connecting -> {
+                KeepScreenOn()
+                ConnectingContent()
+            }
+            CallPhase.Connected, CallPhase.InCall -> {
+                KeepScreenOn()
+                InCallContent(state, onEndCall, onToggleMute)
+            }
             is CallPhase.Failed -> FailedContent(state.phase.message, onDismissError)
         }
+    }
+}
+
+/**
+ * 이 컴포저블이 화면에 있는 동안 화면 자동 꺼짐을 막는다 (이슈 #32).
+ *
+ * 화면이 꺼지면 약 6초 뒤 SDK 가 대화를 스스로 중단한다. Galaxy S26 은 자동 꺼짐이 30초라
+ * 침묵하거나 듣기만 해도 통화가 끊겼다. 전원 버튼·다른 앱 전환까지 막으려면
+ * 포그라운드 서비스가 필요하다 (이슈 #13).
+ */
+@Composable
+private fun KeepScreenOn() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 }
 
