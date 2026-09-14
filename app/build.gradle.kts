@@ -56,6 +56,9 @@ dependencies {
     // Firebase AI Logic (Gemini Live API)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
+    // 함수 호출 응답(FunctionResponsePart)에 JsonObject 가 필요하다. firebase-ai 가 이미 내부에서 쓰는
+    // 라이브러리라 APK 에 새 코드가 늘지 않고, 앱 코드에서 쓸 수 있게 드러내기만 한다 (이슈 #17 S5-2)
+    implementation(libs.kotlinx.serialization.json)
     // App Check: 2026년 7월부터 Firebase AI Logic에 자동 강제 적용됨.
     // Phase 0은 디버그 빌드 전용이라 debug provider를 사용한다.
     // 릴리스 빌드를 만들게 되면 Play Integrity provider로 교체해야 한다.

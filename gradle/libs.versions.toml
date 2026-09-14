@@ -12,6 +12,8 @@ activityCompose = "1.11.0"
 composeBom = "2024.09.00"
 googleServices = "4.5.0"
 firebaseBom = "34.19.0"
+# firebase-ai 17.17.0 이 내부에서 쓰는 버전과 동일하게 맞춘다 (함수 호출 응답의 JsonObject, 이슈 #17)
+kotlinxSerializationJson = "1.7.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -34,6 +36,7 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3" 
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-ai = { group = "com.google.firebase", name = "firebase-ai" }
 firebase-appcheck-debug = { group = "com.google.firebase", name = "firebase-appcheck-debug" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

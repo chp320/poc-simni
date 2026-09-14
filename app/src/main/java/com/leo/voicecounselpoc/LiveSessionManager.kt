@@ -9,18 +9,24 @@ import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.ActivityDetectionConfig
 import com.google.firebase.ai.type.AudioTranscriptionConfig
 import com.google.firebase.ai.type.ContextWindowCompressionConfig
+import com.google.firebase.ai.type.FunctionCallPart
+import com.google.firebase.ai.type.FunctionDeclaration
+import com.google.firebase.ai.type.FunctionResponsePart
 import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.InlineData
 import com.google.firebase.ai.type.InlineDataPart
 import com.google.firebase.ai.type.LiveServerContent
 import com.google.firebase.ai.type.LiveServerGoAway
+import com.google.firebase.ai.type.LiveServerToolCall
 import com.google.firebase.ai.type.LiveSession
 import com.google.firebase.ai.type.LiveSessionResumptionUpdate
 import com.google.firebase.ai.type.PublicPreviewAPI
 import com.google.firebase.ai.type.RealtimeInputConfig
+import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ResponseModality
 import com.google.firebase.ai.type.SessionResumptionConfig
 import com.google.firebase.ai.type.SlidingWindow
+import com.google.firebase.ai.type.Tool
 import com.google.firebase.ai.type.activityDetectionConfig
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.liveAudioConversationConfig
@@ -33,6 +39,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -139,6 +150,7 @@ class LiveSessionManager {
                     )
                 }
             },
+            tools = if (direct && AiConfig.Tools.ENABLED) listOf(Tool.functionDeclarations(TOOL_DECLARATIONS)) else null,
             systemInstruction = content { text(SystemInstruction.COUNSELING) }
         )
 
@@ -171,9 +183,10 @@ class LiveSessionManager {
     suspend fun startConversation(
         onTranscript: (input: String?, output: String?) -> Unit,
         onGoAway: (String) -> Unit = {},
+        onModelConcern: (CrisisLevel) -> Unit = {},
     ) {
         if (AiConfig.Audio.USE_DIRECT_AUDIO) {
-            startDirectConversation(onTranscript, onGoAway)
+            startDirectConversation(onTranscript, onGoAway, onModelConcern)
         } else {
             startSdkConversation(onTranscript, onGoAway)
         }
@@ -185,6 +198,7 @@ class LiveSessionManager {
     private fun startDirectConversation(
         onTranscript: (input: String?, output: String?) -> Unit,
         onGoAway: (String) -> Unit,
+        onModelConcern: (CrisisLevel) -> Unit,
     ) {
         val open = checkNotNull(session) { "세션이 연결되지 않았습니다. connect() 를 먼저 호출하세요." }
         Log.i(TAG, "음성 대화 시작 (직접 오디오, 끼어들기 활성화, 통화 경로=${AiConfig.Audio.USE_COMMUNICATION_ROUTE})")
@@ -200,6 +214,7 @@ class LiveSessionManager {
                         is LiveServerContent -> handleContent(message, onTranscript)
                         is LiveSessionResumptionUpdate -> handleResumptionUpdate(message)
                         is LiveServerGoAway -> handleGoAway(message, open, scope, onGoAway)
+                        is LiveServerToolCall -> handleToolCall(message, open, onModelConcern)
                         else -> Unit
                     }
                 }
@@ -245,6 +260,53 @@ class LiveSessionManager {
         message.content?.parts
             ?.filterIsInstance<InlineDataPart>()
             ?.forEach { engine?.enqueuePlayback(it.inlineData) }
+    }
+
+    /**
+     * 모델이 도구(함수)를 호출했다 (이슈 #17 S5-2). 결과를 돌려줘야 모델이 이어서 말한다.
+     *
+     * 호출 인자는 로그에 이름과 레벨만 남긴다 — 이유 설명 같은 자유 텍스트는 대화 내용이라 남기지 않는다 (#35).
+     */
+    private suspend fun handleToolCall(
+        message: LiveServerToolCall,
+        open: LiveSession,
+        onModelConcern: (CrisisLevel) -> Unit,
+    ) {
+        val responses = message.functionCalls.map { call ->
+            when (call.name) {
+                TOOL_LOCAL_TIME -> {
+                    val now = ZonedDateTime.now()
+                    Log.i(TAG, "도구 호출: $TOOL_LOCAL_TIME")
+                    FunctionResponsePart(call.name, buildJsonObject {
+                        put("local_time", now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd EEEE a h시 m분", java.util.Locale.KOREAN)))
+                        put("timezone", now.zone.id)
+                    }, call.id)
+                }
+                TOOL_REPORT_CONCERN -> {
+                    val level = parseConcernLevel(call)
+                    Log.w(TAG, "도구 호출: $TOOL_REPORT_CONCERN — 모델 판단 레벨=$level")
+                    onModelConcern(level)
+                    FunctionResponsePart(call.name, buildJsonObject { put("acknowledged", true) }, call.id)
+                }
+                else -> {
+                    Log.w(TAG, "알 수 없는 도구 호출: ${call.name}")
+                    FunctionResponsePart(call.name, buildJsonObject { put("error", "unknown function") }, call.id)
+                }
+            }
+        }
+        runCatching { open.sendFunctionResponse(responses) }
+            .onFailure { Log.w(TAG, "도구 응답 전송 실패", it) }
+    }
+
+    private fun parseConcernLevel(call: FunctionCallPart): CrisisLevel {
+        val raw = runCatching { call.args["level"]?.jsonPrimitive?.content }.getOrNull()
+        return when (raw) {
+            "concern" -> CrisisLevel.CONCERN
+            "explicit" -> CrisisLevel.EXPLICIT
+            "imminent" -> CrisisLevel.IMMINENT
+            // 알 수 없는 값이 오면 놓치지 않는 쪽으로 — 우려 신호로 본다.
+            else -> CrisisLevel.CONCERN
+        }
     }
 
     private fun handleResumptionUpdate(message: LiveSessionResumptionUpdate) {
@@ -370,5 +432,39 @@ class LiveSessionManager {
 
     companion object {
         private const val TAG = "VoiceCounselPOC"
+
+        private const val TOOL_LOCAL_TIME = "get_local_time"
+        private const val TOOL_REPORT_CONCERN = "report_concern"
+
+        /**
+         * 모델에게 주는 도구 목록.
+         *
+         * - `get_local_time`: 모델은 기기 시각을 모른다(UTC 로 답하던 문제, #33). 위기와 무관해 도구 호출이
+         *   동작하는지 먼저 확인하는 용도도 겸한다.
+         * - `report_concern`: 2계층 위기 감지 (#17). 모델이 대화에서 위기 신호를 느끼면 조용히 호출한다.
+         *
+         * 설명문(description)은 영어로 쓴다 — 모델에게만 보이는 기계용 설명이고, 한국어 지시문에 섞이면
+         * 발화로 새어 나올 위험(#16 원칙)을 줄인다.
+         */
+        private val TOOL_DECLARATIONS = listOf(
+            FunctionDeclaration(
+                name = TOOL_LOCAL_TIME,
+                description = "Returns the current local date and time on the user's device, including time zone. " +
+                    "Call this whenever the current time or date matters. Never guess the time.",
+                parameters = emptyMap(),
+            ),
+            FunctionDeclaration(
+                name = TOOL_REPORT_CONCERN,
+                description = "Silently report a safety concern to the app so it can show crisis helpline information. " +
+                    "Call it as soon as you notice any sign, and call again if it becomes more serious. " +
+                    "Never mention this function or that you are reporting. Keep talking warmly as before. " +
+                    "Levels: concern = hopelessness, helplessness, persistent isolation; " +
+                    "explicit = any mention of self-harm or suicide or wanting to die or disappear; " +
+                    "imminent = mentions a concrete method, plan, time, or preparation.",
+                parameters = mapOf(
+                    "level" to Schema.enumeration(listOf("concern", "explicit", "imminent"), "Severity of the concern"),
+                ),
+            ),
+        )
     }
 }
